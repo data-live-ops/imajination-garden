@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Refleksi Diri</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f4f8;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+        }
+
+        p {
+            margin-bottom: 30px;
+            color: #666;
+        }
+
+        input[type=range] {
+            width: 100%;
+            margin: 20px 0;
+            -webkit-appearance: none;
+            background: transparent;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: #4A90E2;
+            cursor: pointer;
+            margin-top: -10px;
+            box-shadow: 1px 1px 1px #000000, 0px 0px 1px #0d0d0d;
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #ddd;
+            border-radius: 2px;
+        }
+
+        button {
+            background-color: #4A90E2;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: background 0.3s;
+            width: 100%;
+        }
+
+        button:hover {
+            background-color: #357ABD;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 20px;
+            font-size: 0.9rem;
+            color: #888;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        #waiting-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #4A90E2;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 2s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container" id="question-container">
+        <h1 id="question-title">Pertanyaan 1</h1>
+        <p>Seberapa puaskah Anda dengan kondisi kesehatan mental Anda saat ini?</p>
+
+        <div style="display: flex; justify-content: space-between; font-size: 0.8rem; color: #888; margin-bottom: 5px;">
+            <span>Sangat Buruk</span>
+            <span>Sangat Baik</span>
+        </div>
+        <input type="range" id="answer-slider" min="0" max="100" value="50">
+
+        <button id="submit-btn" onclick="submitAnswer()">Kirim Jawaban</button>
+    </div>
+
+    <div class="container hidden" id="waiting-screen">
+        <div class="loader"></div>
+        <h2>Jawaban Terkirim</h2>
+        <p>Menunggu pertanyaan selanjutnya...</p>
+    </div>
+
+    <div class="status" id="connection-status">Connecting...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        // Supabase Config
+        const SUPABASE_URL = 'https://uxyojsfbpvugnudbhwhb.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV4eW9qc2ZicHZ1Z251ZGJod2hiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4OTI0NjgsImV4cCI6MjA4NDQ2ODQ2OH0.p8uP0jHpEvsblAR--oSST5rSAXkhM3-MgRvQTsxv_r0';
+        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        let currentQuestionIndex = 0;
+        let hasAnswered = false;
+
+        const questions = [
+            "Seberapa puaskah Anda dengan kondisi kesehatan mental Anda saat ini?", // 1. Base/Terrain
+            "Seberapa sering Anda merasa tenang dan damai?", // 2. Sky/Weather
+            "Seberapa kuat dukungan sosial yang Anda rasakan?", // 3. Trees/Structure
+            "Seberapa sering Anda merasa bersyukur?", // 4. Flowers/Beauty
+            "Seberapa jernih pikiran Anda dalam mengambil keputusan?", // 5. Water/Clarity
+            "Seberapa sering Anda tertawa lepas?", // 6. Birds/Fauna
+            "Seberapa hangat hubungan Anda dengan keluarga?", // 7. Sun/Light
+            "Seberapa sering Anda berinteraksi dengan alam?", // 8. Wind/Movement
+            "Seberapa dalam Anda mengenal diri sendiri?", // 9. Roots/Depth
+            "Seberapa optimis Anda menatap masa depan?" // 10. Fruits/Result
+        ];
+
+        // Initialize
+        async function init() {
+            document.getElementById('connection-status').innerText = 'Connected (Supabase)';
+            document.getElementById('connection-status').style.color = 'green';
+
+            // Get current state
+            const { data, error } = await supabase
+                .from('game_state')
+                .select('current_question_index')
+                .eq('id', 1)
+                .single();
+
+            if (data) {
+                currentQuestionIndex = data.current_question_index;
+                updateUI();
+            }
+
+            // Listen for state changes
+            supabase
+                .channel('game_state_channel')
+                .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'game_state' }, payload => {
+                    const newIndex = payload.new.current_question_index;
+                    if (newIndex !== currentQuestionIndex) {
+                        currentQuestionIndex = newIndex;
+                        hasAnswered = false; // Reset for new question
+                        updateUI();
+                    }
+                })
+                .subscribe();
+        }
+
+        function updateUI() {
+            // Check if game ended (assuming > 9 is end, or we can use specific flag)
+            // But logic says 10 questions (0-9). If index > 9, finish.
+            if (currentQuestionIndex >= questions.length) {
+                document.getElementById('question-container').classList.add('hidden');
+                document.getElementById('waiting-screen').classList.remove('hidden');
+                document.querySelector('#waiting-screen h2').innerText = "Sesi Selesai";
+                document.querySelector('#waiting-screen p').innerText = "Terima kasih telah berpartisipasi.";
+                document.querySelector('.loader').classList.add('hidden');
+                return;
+            }
+
+            document.getElementById('question-title').innerText = `Pertanyaan ${currentQuestionIndex + 1}`;
+            document.querySelector('#question-container p').innerText = questions[currentQuestionIndex];
+
+            // Reset UI
+            document.getElementById('answer-slider').value = 50;
+
+            if (hasAnswered) {
+                document.getElementById('question-container').classList.add('hidden');
+                document.getElementById('waiting-screen').classList.remove('hidden');
+            } else {
+                document.getElementById('question-container').classList.remove('hidden');
+                document.getElementById('waiting-screen').classList.add('hidden');
+            }
+        }
+
+        async function submitAnswer() {
+            if (hasAnswered) return;
+
+            const value = parseInt(document.getElementById('answer-slider').value);
+
+            // Optimistic UI update
+            hasAnswered = true;
+            updateUI();
+
+            const { error } = await supabase
+                .from('answers')
+                .insert([{ question_index: currentQuestionIndex, value: value }]);
+
+            if (error) {
+                console.error('Error submitting:', error);
+                alert('Gagal mengirim jawaban. Coba lagi.');
+                hasAnswered = false;
+                updateUI();
+            }
+        }
+
+        init();
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Our Imajination Garden</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 10px;
+            border-radius: 8px;
+            display: flex;
+            gap: 10px;
+            opacity: 0;
+            /* Hidden by default, hover to see */
+            transition: opacity 0.3s;
+        }
+
+        #controls:hover {
+            opacity: 1;
+        }
+
+        button {
+            padding: 8px 16px;
+            cursor: pointer;
+            background: #fff;
+            border: none;
+            border-radius: 4px;
+        }
+
+        .hud {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: white;
+            text-align: right;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px black;
+        }
+
+        h2 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+
+        p {
+            margin: 5px 0 0;
+        }
+    </style>
+</head>
+
+<body>
+
+    <canvas id="gardenCanvas"></canvas>
+
+    <div class="hud">
+        <h2 id="stage-name">Stage 1: Base</h2>
+        <p id="stats">Avg Health: -%</p>
+    </div>
+
+    <div id="controls">
+        <button>Next Question</button>
+        <button>Reset Garden</button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        // Supabase Config
+        const SUPABASE_URL = 'https://uxyojsfbpvugnudbhwhb.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV4eW9qc2ZicHZ1Z251ZGJod2hiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4OTI0NjgsImV4cCI6MjA4NDQ2ODQ2OH0.p8uP0jHpEvsblAR--oSST5rSAXkhM3-MgRvQTsxv_r0';
+        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        const canvas = document.getElementById('gardenCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Setup Canvas
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            if (gardenState.length) drawGarden();
+        }
+        window.addEventListener('resize', resize);
+
+        // Game State
+        let currentQuestionIndex = 0;
+        let gardenState = new Array(10).fill(50); // Store averages here
+        let voteCounts = new Array(10).fill(0); // Store vote counts
+        let rawAnswers = Array.from({ length: 10 }, () => []); // Cache local answers for fast averaging
+
+        const stageNames = [
+            "Terrain", "Sky", "Structure", "Beauty", "Clarity",
+            "Joy", "Warmth", "Interaction", "Depth", "Future"
+        ];
+
+        // Animation Loop
+        let frame = 0;
+        function animate() {
+            frame++;
+            drawGarden();
+            requestAnimationFrame(animate);
+        }
+        animate(); // Start loop
+
+        // --- Supabase Logic ---
+
+        async function init() {
+            // 1. Get Game State
+            const { data: gsData } = await supabase
+                .from('game_state')
+                .select('current_question_index')
+                .eq('id', 1)
+                .single();
+            if (gsData) {
+                currentQuestionIndex = gsData.current_question_index;
+            }
+
+            // 2. Fetch ALL answers to build initial state (Heavy initial load, ok for <10k rows)
+            const { data: allAnswers } = await supabase.from('answers').select('question_index, value');
+
+            if (allAnswers) {
+                allAnswers.forEach(ans => {
+                    if (ans.question_index < 10) {
+                        rawAnswers[ans.question_index].push(ans.value);
+                    }
+                });
+                recalcAll();
+            }
+
+            updateHUD();
+
+            // 3. Listen for NEW answers
+            supabase
+                .channel('room1')
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'answers' }, payload => {
+                    const newAns = payload.new;
+                    if (newAns.question_index < 10) {
+                        rawAnswers[newAns.question_index].push(newAns.value);
+                        recalc(newAns.question_index);
+                        updateHUD();
+                    }
+                })
+                .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'game_state' }, payload => {
+                    currentQuestionIndex = payload.new.current_question_index;
+                    updateHUD();
+                })
+                .subscribe();
+        }
+
+        function recalc(index) {
+            const arr = rawAnswers[index];
+            if (arr.length > 0) {
+                const sum = arr.reduce((a, b) => a + b, 0);
+                gardenState[index] = sum / arr.length;
+                voteCounts[index] = arr.length;
+            } else {
+                gardenState[index] = 50;
+                voteCounts[index] = 0;
+            }
+        }
+
+        function recalcAll() {
+            for (let i = 0; i < 10; i++) recalc(i);
+        }
+
+        function updateHUD() {
+            const currentAvg = Math.round(gardenState[currentQuestionIndex] || 0);
+            const count = voteCounts[currentQuestionIndex] || 0;
+
+            document.getElementById('stage-name').innerText = `Stage ${currentQuestionIndex + 1}: ${stageNames[currentQuestionIndex]}`;
+
+            let text = `Avg Health: ${currentAvg}%`;
+            // Show vote count
+            text += ` | Votes: ${count}`;
+
+            document.getElementById('stats').innerText = text;
+        }
+
+        // Removed dead socket code
+
+
+        // --- VISUALIZATION LOGIC ---
+
+        // Initialize the application
+        init();
+
+        // --- VISUALIZATION LOGIC ---
+        // Clearing handled by Sky/Terrain draws mostly, but good practice
+        // ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 1. Terrain (Background)
+        drawTerrain(gardenState[0]);
+
+        // 2. Sky (Weather)
+        drawSky(gardenState[1]);
+
+        // Save context for camera/shakes if needed, but keeping it static for now
+
+        // 3. Trees (Structure) - Stage 3
+        if (currentQuestionIndex >= 2) drawTrees(gardenState[2]);
+
+        // 9. Roots/Depth - Stage 9 (Drawn behind other ground elements)
+        if (currentQuestionIndex >= 8) drawRoots(gardenState[8]);
+
+        // 5. Water (Clarity) - Stage 5
+        if (currentQuestionIndex >= 4) drawWater(gardenState[4]);
+
+        // 4. Flowers (Beauty) - Stage 4
+        if (currentQuestionIndex >= 3) drawFlowers(gardenState[3]);
+
+        // 6. Joy (Fauna/Fireflies) - Stage 6
+        if (currentQuestionIndex >= 5) drawFauna(gardenState[5]);
+
+        // 7. Sun/Light (Warmth) - Stage 7
+        if (currentQuestionIndex >= 6) drawSun(gardenState[6]);
+
+        // 8. Wind/Particles (Interaction) - Stage 8
+        if (currentQuestionIndex >= 7) drawWind(gardenState[7]);
+
+        // 10. Fruits/Future - Stage 10
+        if (currentQuestionIndex >= 9) drawFruits(gardenState[9]);
+        }
+
+        // --- DRAWING FUNCTIONS ---
+
+        function drawTerrain(health) {
+            // Health 0: Dry/Brown, Health 100: Lush/Green
+            const h = health / 100;
+
+            // Gradient Ground
+            const gradient = ctx.createLinearGradient(0, canvas.height * 0.6, 0, canvas.height);
+            // Color interpolation
+            // Bad: #8B4513 (139, 69, 19), Good: #228B22 (34, 139, 34)
+            const r = 139 + (34 - 139) * h;
+            const g = 69 + (139 - 69) * h;
+            const b = 19 + (34 - 19) * h;
+
+            gradient.addColorStop(0, `rgb(${r}, ${g}, ${b})`);
+            gradient.addColorStop(1, `rgb(${r * 0.6}, ${g * 0.6}, ${b * 0.6})`); // Darker bottom
+
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, canvas.height * 0.6, canvas.width, canvas.height * 0.4);
+
+            // Add texture/noise if high health
+            if (h > 0.5) {
+                ctx.fillStyle = `rgba(0, 100, 0, 0.1)`;
+                for (let i = 0; i < 100 * h; i++) {
+                    const x = (i * 137.5) % canvas.width;
+                    const y = canvas.height * 0.6 + (i * 20) % (canvas.height * 0.4);
+                    ctx.fillRect(x, y, 2, 2);
+                }
+            }
+        }
+
+        function drawSky(health) {
+            const h = health / 100;
+            // Bad: Stormy Grey #2F4F4F, Good: Sky Blue #87CEEB
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.6);
+
+            if (h < 0.4) {
+                gradient.addColorStop(0, '#1a1a2e');
+                gradient.addColorStop(1, '#4a4e69');
+            } else {
+                gradient.addColorStop(0, '#4facfe');
+                gradient.addColorStop(1, '#00f2fe');
+            }
+
+            // Draw behind terrain
+            ctx.globalCompositeOperation = 'destination-over';
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height); // Fill all
+            ctx.globalCompositeOperation = 'source-over';
+
+            // Clouds
+            if (h > 0.5) {
+                ctx.fillStyle = `rgba(255, 255, 255, ${0.3 + (h * 0.2)})`;
+                const t = frame * 0.0005 * h;
+                for (let i = 0; i < 5; i++) {
+                    let x = (canvas.width * (i / 5) + t * canvas.width) % (canvas.width + 200) - 100;
+                    let y = 50 + i * 30;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 40, 0, Math.PI * 2);
+                    ctx.arc(x + 30, y - 10, 50, 0, Math.PI * 2);
+                    ctx.arc(x + 60, y + 5, 40, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+
+        function drawTreeBranch(x, y, len, angle, width, depth, health) {
+            ctx.beginPath();
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle);
+
+            // Color based on health
+            ctx.strokeStyle = health > 50 ? '#5D4037' : '#3E2723';
+            ctx.lineWidth = width;
+            ctx.lineCap = 'round';
+
+            ctx.moveTo(0, 0);
+            ctx.lineTo(0, -len);
+            ctx.stroke();
+
+            if (depth > 0) {
+                // Recursion
+                const branchFactor = health > 30 ? 0.75 : 0.6; // Stunted if poor health
+                // Add subtle sway
+                const sway = Math.sin(frame * 0.01 + depth) * 0.02;
+                drawTreeBranch(0, -len, len * branchFactor, -0.3 + sway, width * 0.7, depth - 1, health);
+                drawTreeBranch(0, -len, len * branchFactor, 0.3 + sway, width * 0.7, depth - 1, health);
+            } else {
+                // Leaves
+                if (health > 20) {
+                    ctx.fillStyle = health > 60 ? `rgba(50, 205, 50, 0.8)` : `rgba(107, 142, 35, 0.8)`;
+                    if (health < 40) ctx.fillStyle = `rgba(139, 69, 19, 0.8)`; // Brown
+
+                    ctx.beginPath();
+                    ctx.arc(0, -len, 5 + (health / 10), 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            ctx.restore();
+        }
+
+        function drawTrees(health) {
+            // Pseudo-random but stable trees
+            // To make them stable during animation, we loop fixed count
+            const count = 3 + Math.floor(health / 25);
+
+            for (let i = 0; i < count; i++) {
+                const x = (canvas.width / (count + 1)) * (i + 1);
+                const y = canvas.height * 0.6 + 20;
+                const size = 60 + (health * 0.8);
+
+                drawTreeBranch(x, y, size, 0, 10 + (health / 10), 4 + Math.floor(health / 30), health);
+            }
+        }
+
+        function drawFlowers(health) {
+            // Scattered on ground
+            const count = Math.floor(health / 2); // Up to 50 flowers
+            const time = frame * 0.05;
+
+            for (let i = 0; i < count; i++) {
+                // Pseudo-random coord
+                const x = ((i * 137) % canvas.width);
+                const y = (canvas.height * 0.65) + ((i * 91) % (canvas.height * 0.3));
+
+                // Sway
+                const sway = Math.sin(time + x) * 2;
+
+                // Stem
+                ctx.strokeStyle = 'green';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+                ctx.lineTo(x + sway, y - 20);
+                ctx.stroke();
+
+                // Bloom
+                ctx.fillStyle = `hsl(${(i * 30 + health) % 360}, 80%, 60%)`;
+                ctx.beginPath();
+                ctx.arc(x + sway, y - 20, 3 + (health / 20), 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function drawWater(health) {
+            if (health < 20) return;
+
+            // Pond or River at bottom center
+            const time = frame * 0.02;
+            ctx.fillStyle = `rgba(30, 144, 255, ${0.4 + health / 200})`;
+
+            ctx.beginPath();
+            // Wave shape
+            const yBase = canvas.height * 0.85;
+            ctx.moveTo(0, yBase);
+
+            for (let x = 0; x <= canvas.width; x += 20) {
+                ctx.lineTo(x, yBase + Math.sin(x * 0.01 + time) * 10 * (health / 100));
+            }
+            ctx.lineTo(canvas.width, canvas.height);
+            ctx.lineTo(0, canvas.height);
+            ctx.fill();
+        }
+
+        function drawFauna(health) {
+            // Fireflies or Orbs of light floating
+            const count = Math.floor(health / 5);
+            ctx.fillStyle = 'rgba(255, 255, 200, 0.8)';
+
+            for (let i = 0; i < count; i++) {
+                const t = frame * 0.01 + i;
+                // Lissajous figures for organic movement
+                const x = (Math.sin(t) * 0.5 + 0.5) * canvas.width;
+                const y = (Math.cos(t * 1.3) * 0.3 + 0.5) * canvas.height;
+
+                ctx.beginPath();
+                ctx.arc(x, y, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function drawSun(health) {
+            // Warm glow
+            const x = canvas.width * 0.8;
+            const y = canvas.height * 0.15;
+
+            // Rays
+            if (health > 60) {
+                ctx.strokeStyle = `rgba(255, 255, 200, 0.2)`;
+                ctx.lineWidth = 2;
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.rotate(frame * 0.005);
+                for (let i = 0; i < 12; i++) {
+                    ctx.rotate(Math.PI / 6);
+                    ctx.beginPath();
+                    ctx.moveTo(0, 0);
+                    ctx.lineTo(0, 200);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+
+            const gradient = ctx.createRadialGradient(x, y, 10, x, y, 200 + health * 2);
+            gradient.addColorStop(0, `rgba(255, 255, 200, ${health / 100})`);
+            gradient.addColorStop(1, 'rgba(255, 255, 0, 0)');
+
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.globalCompositeOperation = 'source-over';
+        }
+
+        function drawWind(health) {
+            // Moving lines across screen
+            if (health < 30) return;
+
+            ctx.strokeStyle = `rgba(255, 255, 255, ${health / 300})`;
+            ctx.lineWidth = 1;
+
+            const count = 10;
+
+            for (let i = 0; i < count; i++) {
+                const speed = 1 + (i % 3);
+                // Position based on time + offset
+                const x = (frame * speed * 2 + i * 100) % (canvas.width + 200) - 100;
+                const y = 100 + (i * 50) + Math.sin(frame * 0.05 + i) * 20;
+
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+                ctx.lineTo(x + 50, y + 5);
+                ctx.stroke();
+            }
+        }
+
+        function drawRoots(health) {
+            // Dark veins/roots in the ground
+            if (health < 10) return;
+
+            ctx.strokeStyle = `rgba(40, 20, 10, ${health / 200})`;
+            ctx.lineWidth = 2;
+
+            const count = 5;
+            for (let i = 0; i < count; i++) {
+                const startX = (canvas.width / count) * i + 100;
+                const startY = canvas.height * 0.6;
+
+                ctx.beginPath();
+                ctx.moveTo(startX, startY);
+                // Simple squiggle
+                ctx.bezierCurveTo(startX - 20, startY + 50, startX + 20, startY + 100, startX, startY + 150);
+                ctx.stroke();
+            }
+        }
+
+        function drawFruits(health) {
+            // Apples on trees
+            // Only if trees exist (implied by previous stages)
+            const count = 3 + Math.floor(gardenState[2] / 25);
+            if (health < 40) return;
+
+            for (let i = 0; i < count; i++) {
+                const x = (canvas.width / (count + 1)) * (i + 1);
+                // Approximate tree top location from drawTrees
+                // We just place them arbitrarily near top of tree trunk
+
+                ctx.fillStyle = '#ff4444';
+                // Multiple fruits per tree
+                const fruitCount = Math.floor(health / 20);
+                for (let j = 0; j < fruitCount; j++) {
+                    const fx = x + Math.cos(j * 2 + frame * 0.01) * 30;
+                    const fy = (canvas.height * 0.6) - 120 + Math.sin(j * 2) * 30;
+
+                    ctx.beginPath();
+                    ctx.arc(fx, fy, 4 + health / 30, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+    </script>
+</body>
+
+</html>
