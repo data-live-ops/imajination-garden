@@ -111,17 +111,33 @@
 
         // Game State (must be defined before resize/animate)
         let currentQuestionIndex = 0;
-        let gardenState = new Array(10).fill(50); // Store averages here
-        let voteCounts = new Array(10).fill(0); // Store vote counts
-        let rawAnswers = Array.from({ length: 10 }, () => []); // Cache local answers for fast averaging
+        let gardenState = new Array(10).fill(50);
+        let voteCounts = new Array(10).fill(0);
+        let rawAnswers = Array.from({ length: 10 }, () => []);
+
+        // Smooth transition targets
+        let displayState = new Array(10).fill(0); // What's actually displayed (for smooth transitions)
+        let targetState = new Array(10).fill(0);  // Target values to animate towards
 
         const stageNames = [
-            "Terrain", "Sky", "Structure", "Beauty", "Clarity",
-            "Joy", "Warmth", "Interaction", "Depth", "Future"
+            "Pijakan", "Langit", "Pohon", "Bunga", "Air",
+            "Kunang-kunang", "Matahari", "Angin", "Akar", "Buah"
         ];
 
-        // Animation Loop
+        // Animation state
         let frame = 0;
+        let pulseIntensity = 0; // For vote pulse effect
+        let lastVoteTime = 0;
+
+        // Procedural generation seeds (stable per session)
+        const treeSeed = Math.random() * 1000;
+        const flowerSeed = Math.random() * 1000;
+
+        // Pseudo-random function with seed
+        function seededRandom(seed) {
+            const x = Math.sin(seed) * 10000;
+            return x - Math.floor(x);
+        }
 
         // Setup Canvas
         function resize() {
@@ -167,7 +183,7 @@
                     const newAns = payload.new;
                     if (newAns.question_index < 10) {
                         rawAnswers[newAns.question_index].push(newAns.value);
-                        recalc(newAns.question_index);
+                        recalc(newAns.question_index, true); // Trigger pulse!
                         updateHUD();
                     }
                 })
@@ -178,20 +194,39 @@
                 .subscribe();
         }
 
-        function recalc(index) {
+        function recalc(index, triggerPulse = false) {
             const arr = rawAnswers[index];
             if (arr.length > 0) {
                 const sum = arr.reduce((a, b) => a + b, 0);
                 gardenState[index] = sum / arr.length;
+                targetState[index] = gardenState[index];
                 voteCounts[index] = arr.length;
             } else {
-                gardenState[index] = 50;
+                gardenState[index] = 0;
+                targetState[index] = 0;
                 voteCounts[index] = 0;
+            }
+
+            // Trigger pulse effect when new vote comes in
+            if (triggerPulse) {
+                pulseIntensity = 1.0;
+                lastVoteTime = frame;
             }
         }
 
         function recalcAll() {
-            for (let i = 0; i < 10; i++) recalc(i);
+            for (let i = 0; i < 10; i++) recalc(i, false);
+        }
+
+        // Smooth interpolation for display values
+        function updateDisplayState() {
+            for (let i = 0; i < 10; i++) {
+                const target = hasVotes(i) ? targetState[i] : 0;
+                // Smooth easing towards target
+                displayState[i] += (target - displayState[i]) * 0.05;
+            }
+            // Decay pulse effect
+            pulseIntensity *= 0.95;
         }
 
         function updateHUD() {
@@ -259,324 +294,558 @@
         }
 
         // --- VISUALIZATION LOGIC ---
-        // Helper: check if stage has votes (element should appear)
+
+        // Helper: check if stage has votes
         function hasVotes(stageIndex) {
             return voteCounts[stageIndex] > 0;
         }
 
+        // Calculate overall mood (average of all answered questions)
+        function getOverallMood() {
+            let sum = 0, count = 0;
+            for (let i = 0; i <= currentQuestionIndex; i++) {
+                if (hasVotes(i)) {
+                    sum += displayState[i];
+                    count++;
+                }
+            }
+            return count > 0 ? sum / count : 30;
+        }
+
+        // Color interpolation helper
+        function lerpColor(color1, color2, t) {
+            const r = Math.round(color1[0] + (color2[0] - color1[0]) * t);
+            const g = Math.round(color1[1] + (color2[1] - color1[1]) * t);
+            const b = Math.round(color1[2] + (color2[2] - color1[2]) * t);
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+
+        // Get mood-based sky colors
+        function getMoodColors(mood) {
+            const h = mood / 100;
+            if (h < 0.3) {
+                // Low: contemplative purple/twilight
+                return {
+                    skyTop: [45, 27, 62],      // Deep purple
+                    skyBottom: [89, 61, 99],   // Soft violet
+                    ambient: [147, 112, 219]   // Medium purple
+                };
+            } else if (h < 0.6) {
+                // Medium: calm blue/teal
+                return {
+                    skyTop: [70, 130, 180],    // Steel blue
+                    skyBottom: [135, 206, 235], // Sky blue
+                    ambient: [100, 149, 237]   // Cornflower
+                };
+            } else {
+                // High: warm golden/energetic
+                return {
+                    skyTop: [135, 206, 250],   // Light sky blue
+                    skyBottom: [255, 223, 186], // Peach
+                    ambient: [255, 215, 0]     // Gold
+                };
+            }
+        }
+
         function drawGarden() {
-            // Clearing handled by Sky/Terrain draws mostly, but good practice
-            // ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Update smooth transitions
+            updateDisplayState();
 
-            // 1. Terrain (Background) - always show, but based on votes
-            drawTerrain(hasVotes(0) ? gardenState[0] : 30); // Default barren if no votes
+            const mood = getOverallMood();
+            const colors = getMoodColors(mood);
 
-            // 2. Sky (Weather) - always show, but based on votes
-            drawSky(hasVotes(1) ? gardenState[1] : 30); // Default gloomy if no votes
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Save context for camera/shakes if needed, but keeping it static for now
+            // Draw layers in order
+            drawSky(displayState[1], mood, colors);
+            drawTerrain(displayState[0], mood);
 
-            // 3. Trees (Structure) - Stage 3: only show if has votes
-            if (currentQuestionIndex >= 2 && hasVotes(2)) drawTrees(gardenState[2]);
+            // Draw grass (ambient motion)
+            drawGrass(mood);
 
-            // 9. Roots/Depth - Stage 9: only show if has votes
-            if (currentQuestionIndex >= 8 && hasVotes(8)) drawRoots(gardenState[8]);
+            // 9. Roots - behind trees
+            if (currentQuestionIndex >= 8 && displayState[8] > 1) {
+                drawRoots(displayState[8]);
+            }
 
-            // 5. Water (Clarity) - Stage 5: only show if has votes
-            if (currentQuestionIndex >= 4 && hasVotes(4)) drawWater(gardenState[4]);
+            // 3. Trees
+            if (currentQuestionIndex >= 2 && displayState[2] > 1) {
+                drawTrees(displayState[2]);
+            }
 
-            // 4. Flowers (Beauty) - Stage 4: only show if has votes
-            if (currentQuestionIndex >= 3 && hasVotes(3)) drawFlowers(gardenState[3]);
+            // 5. Water
+            if (currentQuestionIndex >= 4 && displayState[4] > 1) {
+                drawWater(displayState[4]);
+            }
 
-            // 6. Joy (Fauna/Fireflies) - Stage 6: only show if has votes
-            if (currentQuestionIndex >= 5 && hasVotes(5)) drawFauna(gardenState[5]);
+            // 4. Flowers
+            if (currentQuestionIndex >= 3 && displayState[3] > 1) {
+                drawFlowers(displayState[3]);
+            }
 
-            // 7. Sun/Light (Warmth) - Stage 7: only show if has votes
-            if (currentQuestionIndex >= 6 && hasVotes(6)) drawSun(gardenState[6]);
+            // 6. Fireflies
+            if (currentQuestionIndex >= 5 && displayState[5] > 1) {
+                drawFauna(displayState[5], colors);
+            }
 
-            // 8. Wind/Particles (Interaction) - Stage 8: only show if has votes
-            if (currentQuestionIndex >= 7 && hasVotes(7)) drawWind(gardenState[7]);
+            // 7. Sun
+            if (currentQuestionIndex >= 6 && displayState[6] > 1) {
+                drawSun(displayState[6], colors);
+            }
 
-            // 10. Fruits/Future - Stage 10: only show if has votes
-            if (currentQuestionIndex >= 9 && hasVotes(9)) drawFruits(gardenState[9]);
+            // 8. Wind particles
+            if (currentQuestionIndex >= 7 && displayState[7] > 1) {
+                drawWind(displayState[7]);
+            }
+
+            // 10. Fruits
+            if (currentQuestionIndex >= 9 && displayState[9] > 1) {
+                drawFruits(displayState[9]);
+            }
+
+            // Draw pulse overlay effect
+            if (pulseIntensity > 0.01) {
+                drawPulseEffect();
+            }
         }
 
         // --- DRAWING FUNCTIONS ---
 
-        function drawTerrain(health) {
-            // Health 0: Dry/Brown, Health 100: Lush/Green
-            const h = health / 100;
+        // Pulse effect when new vote arrives
+        function drawPulseEffect() {
+            const alpha = pulseIntensity * 0.3;
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
 
-            // Gradient Ground
-            const gradient = ctx.createLinearGradient(0, canvas.height * 0.6, 0, canvas.height);
-            // Color interpolation
-            // Bad: #8B4513 (139, 69, 19), Good: #228B22 (34, 139, 34)
-            const r = 139 + (34 - 139) * h;
-            const g = 69 + (139 - 69) * h;
-            const b = 19 + (34 - 19) * h;
+        // Ambient grass with wind sway
+        function drawGrass(mood) {
+            const groundY = canvas.height * 0.6;
+            const grassCount = Math.floor(canvas.width / 8);
+            const time = frame * 0.02;
+            const h = mood / 100;
 
-            gradient.addColorStop(0, `rgb(${r}, ${g}, ${b})`);
-            gradient.addColorStop(1, `rgb(${r * 0.6}, ${g * 0.6}, ${b * 0.6})`); // Darker bottom
+            for (let i = 0; i < grassCount; i++) {
+                const x = (i * 8) + seededRandom(i * 13) * 5;
+                const height = 15 + seededRandom(i * 7) * 20 * h;
+                const sway = Math.sin(time + i * 0.3) * 3 * (1 + h);
 
-            ctx.fillStyle = gradient;
-            ctx.fillRect(0, canvas.height * 0.6, canvas.width, canvas.height * 0.4);
+                // Color varies with mood
+                const green = Math.floor(100 + h * 80 + seededRandom(i) * 30);
+                ctx.strokeStyle = `rgb(${50 - h * 20}, ${green}, ${30})`;
+                ctx.lineWidth = 1;
 
-            // Add texture/noise if high health
-            if (h > 0.5) {
-                ctx.fillStyle = `rgba(0, 100, 0, 0.1)`;
-                for (let i = 0; i < 100 * h; i++) {
-                    const x = (i * 137.5) % canvas.width;
-                    const y = canvas.height * 0.6 + (i * 20) % (canvas.height * 0.4);
-                    ctx.fillRect(x, y, 2, 2);
-                }
+                ctx.beginPath();
+                ctx.moveTo(x, groundY);
+                ctx.quadraticCurveTo(x + sway * 0.5, groundY - height * 0.6, x + sway, groundY - height);
+                ctx.stroke();
             }
         }
 
-        function drawSky(health) {
-            const h = health / 100;
-            // Bad: Stormy Grey #2F4F4F, Good: Sky Blue #87CEEB
-            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.6);
+        function drawTerrain(health, mood) {
+            const h = Math.max(health, 10) / 100;
+            const groundY = canvas.height * 0.6;
 
-            if (h < 0.4) {
-                gradient.addColorStop(0, '#1a1a2e');
-                gradient.addColorStop(1, '#4a4e69');
+            // Create rolling hills with bezier curves
+            const gradient = ctx.createLinearGradient(0, groundY, 0, canvas.height);
+
+            // Color based on mood
+            if (mood < 30) {
+                gradient.addColorStop(0, `rgb(${80 + h * 40}, ${60 + h * 30}, ${50})`);
+                gradient.addColorStop(1, `rgb(${40}, ${30}, ${25})`);
+            } else if (mood < 60) {
+                gradient.addColorStop(0, `rgb(${60 + h * 20}, ${100 + h * 50}, ${40})`);
+                gradient.addColorStop(1, `rgb(${30}, ${50}, ${20})`);
             } else {
-                gradient.addColorStop(0, '#4facfe');
-                gradient.addColorStop(1, '#00f2fe');
+                gradient.addColorStop(0, `rgb(${34 + h * 30}, ${139 + h * 30}, ${34})`);
+                gradient.addColorStop(1, `rgb(${20}, ${80}, ${20})`);
             }
 
-            // Draw behind terrain
-            ctx.globalCompositeOperation = 'destination-over';
+            // Draw hilly terrain
             ctx.fillStyle = gradient;
-            ctx.fillRect(0, 0, canvas.width, canvas.height); // Fill all
-            ctx.globalCompositeOperation = 'source-over';
+            ctx.beginPath();
+            ctx.moveTo(0, groundY);
 
-            // Clouds
-            if (h > 0.5) {
-                ctx.fillStyle = `rgba(255, 255, 255, ${0.3 + (h * 0.2)})`;
-                const t = frame * 0.0005 * h;
-                for (let i = 0; i < 5; i++) {
-                    let x = (canvas.width * (i / 5) + t * canvas.width) % (canvas.width + 200) - 100;
-                    let y = 50 + i * 30;
+            // Create gentle hills
+            for (let x = 0; x <= canvas.width; x += 50) {
+                const hillHeight = Math.sin(x * 0.005 + treeSeed) * 20 * h;
+                ctx.lineTo(x, groundY + hillHeight);
+            }
+
+            ctx.lineTo(canvas.width, canvas.height);
+            ctx.lineTo(0, canvas.height);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        function drawSky(health, mood, colors) {
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.65);
+            gradient.addColorStop(0, `rgb(${colors.skyTop[0]}, ${colors.skyTop[1]}, ${colors.skyTop[2]})`);
+            gradient.addColorStop(1, `rgb(${colors.skyBottom[0]}, ${colors.skyBottom[1]}, ${colors.skyBottom[2]})`);
+
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height * 0.65);
+
+            // Animated clouds
+            const h = mood / 100;
+            if (h > 0.3) {
+                const cloudOpacity = 0.2 + h * 0.4;
+                ctx.fillStyle = `rgba(255, 255, 255, ${cloudOpacity})`;
+                const t = frame * 0.0003;
+
+                for (let i = 0; i < 6; i++) {
+                    const seed = seededRandom(i * 100 + treeSeed);
+                    const x = ((seed * canvas.width + t * canvas.width * (0.5 + seed)) % (canvas.width + 300)) - 150;
+                    const y = 40 + seed * 100;
+                    const size = 30 + seed * 40;
+
                     ctx.beginPath();
-                    ctx.arc(x, y, 40, 0, Math.PI * 2);
-                    ctx.arc(x + 30, y - 10, 50, 0, Math.PI * 2);
-                    ctx.arc(x + 60, y + 5, 40, 0, Math.PI * 2);
+                    ctx.arc(x, y, size, 0, Math.PI * 2);
+                    ctx.arc(x + size * 0.8, y - size * 0.2, size * 1.2, 0, Math.PI * 2);
+                    ctx.arc(x + size * 1.6, y + size * 0.1, size * 0.9, 0, Math.PI * 2);
                     ctx.fill();
                 }
             }
+
+            // Stars for low mood (twilight)
+            if (mood < 35) {
+                const starCount = Math.floor((35 - mood) * 2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                for (let i = 0; i < starCount; i++) {
+                    const x = seededRandom(i * 17) * canvas.width;
+                    const y = seededRandom(i * 23) * canvas.height * 0.4;
+                    const twinkle = 0.5 + Math.sin(frame * 0.05 + i) * 0.5;
+                    ctx.globalAlpha = twinkle;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 1 + seededRandom(i) * 1.5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.globalAlpha = 1;
+            }
         }
 
-        function drawTreeBranch(x, y, len, angle, width, depth, health) {
-            ctx.beginPath();
+        // L-System inspired procedural tree
+        function drawProceduralBranch(x, y, len, angle, width, depth, health, seed) {
+            if (depth < 0 || len < 2) return;
+
             ctx.save();
             ctx.translate(x, y);
             ctx.rotate(angle);
 
-            // Color based on health
-            ctx.strokeStyle = health > 50 ? '#5D4037' : '#3E2723';
+            // Sway animation
+            const sway = Math.sin(frame * 0.008 + seed + depth * 0.5) * 0.03 * (5 - depth);
+            ctx.rotate(sway);
+
+            // Branch color
+            const h = health / 100;
+            ctx.strokeStyle = `rgb(${60 + h * 30}, ${40 + h * 20}, ${30})`;
             ctx.lineWidth = width;
             ctx.lineCap = 'round';
 
+            ctx.beginPath();
             ctx.moveTo(0, 0);
             ctx.lineTo(0, -len);
             ctx.stroke();
 
             if (depth > 0) {
-                // Recursion
-                const branchFactor = health > 30 ? 0.75 : 0.6; // Stunted if poor health
-                // Add subtle sway
-                const sway = Math.sin(frame * 0.01 + depth) * 0.02;
-                drawTreeBranch(0, -len, len * branchFactor, -0.3 + sway, width * 0.7, depth - 1, health);
-                drawTreeBranch(0, -len, len * branchFactor, 0.3 + sway, width * 0.7, depth - 1, health);
-            } else {
-                // Leaves
-                if (health > 20) {
-                    ctx.fillStyle = health > 60 ? `rgba(50, 205, 50, 0.8)` : `rgba(107, 142, 35, 0.8)`;
-                    if (health < 40) ctx.fillStyle = `rgba(139, 69, 19, 0.8)`; // Brown
+                // Procedural branching with variation
+                const branchFactor = 0.65 + h * 0.15;
+                const angleVar = 0.3 + seededRandom(seed + depth) * 0.2;
 
+                // Left branch
+                const leftAngle = -angleVar + seededRandom(seed * 2 + depth) * 0.1;
+                drawProceduralBranch(0, -len, len * branchFactor, leftAngle, width * 0.7, depth - 1, health, seed + 1);
+
+                // Right branch
+                const rightAngle = angleVar + seededRandom(seed * 3 + depth) * 0.1;
+                drawProceduralBranch(0, -len, len * branchFactor, rightAngle, width * 0.7, depth - 1, health, seed + 2);
+
+                // Sometimes add middle branch for fuller trees
+                if (h > 0.5 && seededRandom(seed + depth * 7) > 0.6) {
+                    drawProceduralBranch(0, -len * 0.7, len * branchFactor * 0.8, seededRandom(seed) * 0.2 - 0.1, width * 0.5, depth - 2, health, seed + 3);
+                }
+            } else {
+                // Leaves at branch tips
+                if (health > 15) {
+                    const leafSize = 4 + h * 8 + pulseIntensity * 3;
+                    const leafHue = 80 + h * 40; // Yellow-green to deep green
+
+                    ctx.fillStyle = `hsla(${leafHue}, ${50 + h * 30}%, ${30 + h * 25}%, 0.85)`;
                     ctx.beginPath();
-                    ctx.arc(0, -len, 5 + (health / 10), 0, Math.PI * 2);
+                    ctx.arc(0, -len, leafSize, 0, Math.PI * 2);
                     ctx.fill();
                 }
             }
+
             ctx.restore();
         }
 
         function drawTrees(health) {
-            // Pseudo-random but stable trees
-            // To make them stable during animation, we loop fixed count
-            const count = 3 + Math.floor(health / 25);
+            const h = health / 100;
+            const treeCount = 3 + Math.floor(h * 4);
 
-            for (let i = 0; i < count; i++) {
-                const x = (canvas.width / (count + 1)) * (i + 1);
-                const y = canvas.height * 0.6 + 20;
-                const size = 60 + (health * 0.8);
+            for (let i = 0; i < treeCount; i++) {
+                const seed = treeSeed + i * 100;
+                const treeX = canvas.width * (0.1 + (i / treeCount) * 0.8) + seededRandom(seed) * 60 - 30;
+                const treeY = canvas.height * 0.6 + seededRandom(seed + 1) * 30;
+                const treeHeight = 50 + h * 80 + seededRandom(seed + 2) * 40;
+                const treeWidth = 6 + h * 8;
+                const depth = 3 + Math.floor(h * 3);
 
-                drawTreeBranch(x, y, size, 0, 10 + (health / 10), 4 + Math.floor(health / 30), health);
+                drawProceduralBranch(treeX, treeY, treeHeight, 0, treeWidth, depth, health, seed);
             }
         }
 
         function drawFlowers(health) {
-            // Scattered on ground
-            const count = Math.floor(health / 2); // Up to 50 flowers
-            const time = frame * 0.05;
+            const h = health / 100;
+            const count = Math.floor(h * 40);
+            const time = frame * 0.03;
 
             for (let i = 0; i < count; i++) {
-                // Pseudo-random coord
-                const x = ((i * 137) % canvas.width);
-                const y = (canvas.height * 0.65) + ((i * 91) % (canvas.height * 0.3));
+                const seed = flowerSeed + i * 37;
+                const x = seededRandom(seed) * canvas.width;
+                const y = canvas.height * 0.62 + seededRandom(seed + 1) * canvas.height * 0.35;
 
-                // Sway
-                const sway = Math.sin(time + x) * 2;
+                // Skip if in water area
+                if (y > canvas.height * 0.83) continue;
+
+                const stemHeight = 15 + seededRandom(seed + 2) * 20;
+                const sway = Math.sin(time + x * 0.01 + seededRandom(seed) * 3) * 4;
 
                 // Stem
-                ctx.strokeStyle = 'green';
-                ctx.lineWidth = 2;
+                ctx.strokeStyle = `rgb(${40 + h * 30}, ${100 + h * 50}, ${30})`;
+                ctx.lineWidth = 1.5;
                 ctx.beginPath();
                 ctx.moveTo(x, y);
-                ctx.lineTo(x + sway, y - 20);
+                ctx.quadraticCurveTo(x + sway * 0.5, y - stemHeight * 0.5, x + sway, y - stemHeight);
                 ctx.stroke();
 
-                // Bloom
-                ctx.fillStyle = `hsl(${(i * 30 + health) % 360}, 80%, 60%)`;
+                // Flower head
+                const hue = seededRandom(seed + 3) * 60 + (h > 0.5 ? 300 : 30); // Purples/pinks or yellows
+                const size = 3 + h * 5 + pulseIntensity * 2;
+                ctx.fillStyle = `hsl(${hue}, 70%, ${50 + h * 20}%)`;
                 ctx.beginPath();
-                ctx.arc(x + sway, y - 20, 3 + (health / 20), 0, Math.PI * 2);
+                ctx.arc(x + sway, y - stemHeight, size, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Flower center
+                ctx.fillStyle = `hsl(${hue + 40}, 80%, 70%)`;
+                ctx.beginPath();
+                ctx.arc(x + sway, y - stemHeight, size * 0.4, 0, Math.PI * 2);
                 ctx.fill();
             }
         }
 
         function drawWater(health) {
-            if (health < 20) return;
-
-            // Pond or River at bottom center
-            const time = frame * 0.02;
-            ctx.fillStyle = `rgba(30, 144, 255, ${0.4 + health / 200})`;
-
-            ctx.beginPath();
-            // Wave shape
+            const h = health / 100;
+            const time = frame * 0.015;
             const yBase = canvas.height * 0.85;
+
+            // Water gradient
+            const gradient = ctx.createLinearGradient(0, yBase, 0, canvas.height);
+            gradient.addColorStop(0, `rgba(100, 180, 255, ${0.4 + h * 0.3})`);
+            gradient.addColorStop(1, `rgba(30, 100, 180, ${0.6 + h * 0.2})`);
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
             ctx.moveTo(0, yBase);
 
-            for (let x = 0; x <= canvas.width; x += 20) {
-                ctx.lineTo(x, yBase + Math.sin(x * 0.01 + time) * 10 * (health / 100));
+            // Smooth waves
+            for (let x = 0; x <= canvas.width; x += 10) {
+                const wave1 = Math.sin(x * 0.02 + time) * 8 * h;
+                const wave2 = Math.sin(x * 0.01 + time * 0.7) * 5 * h;
+                ctx.lineTo(x, yBase + wave1 + wave2);
             }
+
             ctx.lineTo(canvas.width, canvas.height);
             ctx.lineTo(0, canvas.height);
+            ctx.closePath();
             ctx.fill();
+
+            // Shimmer/reflections
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.1 + h * 0.15})`;
+            for (let i = 0; i < 8; i++) {
+                const rx = seededRandom(i * 50) * canvas.width;
+                const ry = yBase + 20 + seededRandom(i * 51) * (canvas.height - yBase - 30);
+                const rw = 20 + seededRandom(i * 52) * 40;
+                const shimmer = 0.5 + Math.sin(time * 2 + i) * 0.5;
+
+                ctx.globalAlpha = shimmer * (0.1 + h * 0.2);
+                ctx.fillRect(rx, ry, rw, 2);
+            }
+            ctx.globalAlpha = 1;
         }
 
-        function drawFauna(health) {
-            // Fireflies or Orbs of light floating
-            const count = Math.floor(health / 5);
-            ctx.fillStyle = 'rgba(255, 255, 200, 0.8)';
+        function drawFauna(health, colors) {
+            const h = health / 100;
+            const count = Math.floor(h * 15);
 
             for (let i = 0; i < count; i++) {
-                const t = frame * 0.01 + i;
-                // Lissajous figures for organic movement
-                const x = (Math.sin(t) * 0.5 + 0.5) * canvas.width;
-                const y = (Math.cos(t * 1.3) * 0.3 + 0.5) * canvas.height;
+                const t = frame * 0.008 + i * 0.7;
+                const seed = seededRandom(i * 67);
+
+                // Organic floating movement
+                const baseX = seed * canvas.width;
+                const baseY = 0.2 + seed * 0.5;
+                const x = baseX + Math.sin(t + seed * 10) * 100;
+                const y = baseY * canvas.height + Math.cos(t * 0.8 + seed * 5) * 50;
+
+                // Glow effect
+                const glow = 0.5 + Math.sin(t * 3) * 0.5;
+                const size = 2 + glow * 3 + pulseIntensity * 2;
+
+                // Color from mood
+                ctx.fillStyle = `rgba(${colors.ambient[0]}, ${colors.ambient[1]}, ${colors.ambient[2]}, ${0.6 + glow * 0.4})`;
 
                 ctx.beginPath();
-                ctx.arc(x, y, 3, 0, Math.PI * 2);
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Outer glow
+                ctx.fillStyle = `rgba(${colors.ambient[0]}, ${colors.ambient[1]}, ${colors.ambient[2]}, ${0.1 + glow * 0.1})`;
+                ctx.beginPath();
+                ctx.arc(x, y, size * 2.5, 0, Math.PI * 2);
                 ctx.fill();
             }
         }
 
-        function drawSun(health) {
-            // Warm glow
-            const x = canvas.width * 0.8;
-            const y = canvas.height * 0.15;
+        function drawSun(health, colors) {
+            const h = health / 100;
+            const x = canvas.width * 0.85;
+            const y = canvas.height * 0.12;
+            const baseSize = 30 + h * 40;
 
-            // Rays
-            if (health > 60) {
-                ctx.strokeStyle = `rgba(255, 255, 200, 0.2)`;
-                ctx.lineWidth = 2;
-                ctx.save();
-                ctx.translate(x, y);
-                ctx.rotate(frame * 0.005);
-                for (let i = 0; i < 12; i++) {
-                    ctx.rotate(Math.PI / 6);
-                    ctx.beginPath();
-                    ctx.moveTo(0, 0);
-                    ctx.lineTo(0, 200);
-                    ctx.stroke();
-                }
-                ctx.restore();
+            // Animated rays
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(frame * 0.002);
+
+            const rayCount = 12;
+            for (let i = 0; i < rayCount; i++) {
+                ctx.rotate(Math.PI * 2 / rayCount);
+                const rayLength = baseSize + Math.sin(frame * 0.02 + i) * 20;
+
+                ctx.strokeStyle = `rgba(${colors.ambient[0]}, ${colors.ambient[1]}, ${colors.ambient[2]}, ${0.15 + h * 0.1})`;
+                ctx.lineWidth = 3 + h * 3;
+                ctx.beginPath();
+                ctx.moveTo(baseSize * 0.5, 0);
+                ctx.lineTo(rayLength * 1.5, 0);
+                ctx.stroke();
             }
+            ctx.restore();
 
-            const gradient = ctx.createRadialGradient(x, y, 10, x, y, 200 + health * 2);
-            gradient.addColorStop(0, `rgba(255, 255, 200, ${health / 100})`);
-            gradient.addColorStop(1, 'rgba(255, 255, 0, 0)');
+            // Sun glow
+            const gradient = ctx.createRadialGradient(x, y, 0, x, y, baseSize * 3);
+            gradient.addColorStop(0, `rgba(255, 250, 220, ${0.8 + h * 0.2})`);
+            gradient.addColorStop(0.3, `rgba(${colors.ambient[0]}, ${colors.ambient[1]}, ${colors.ambient[2]}, ${0.4 + h * 0.2})`);
+            gradient.addColorStop(1, 'rgba(255, 255, 200, 0)');
 
             ctx.globalCompositeOperation = 'lighter';
             ctx.fillStyle = gradient;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.beginPath();
+            ctx.arc(x, y, baseSize * 3, 0, Math.PI * 2);
+            ctx.fill();
             ctx.globalCompositeOperation = 'source-over';
+
+            // Sun core
+            ctx.fillStyle = `rgba(255, 250, 230, ${0.9 + pulseIntensity * 0.1})`;
+            ctx.beginPath();
+            ctx.arc(x, y, baseSize * 0.4, 0, Math.PI * 2);
+            ctx.fill();
         }
 
         function drawWind(health) {
-            // Moving lines across screen
-            if (health < 30) return;
+            const h = health / 100;
+            const particleCount = Math.floor(h * 20);
 
-            ctx.strokeStyle = `rgba(255, 255, 255, ${health / 300})`;
+            ctx.strokeStyle = `rgba(255, 255, 255, ${0.1 + h * 0.15})`;
             ctx.lineWidth = 1;
 
-            const count = 10;
-
-            for (let i = 0; i < count; i++) {
-                const speed = 1 + (i % 3);
-                // Position based on time + offset
-                const x = (frame * speed * 2 + i * 100) % (canvas.width + 200) - 100;
-                const y = 100 + (i * 50) + Math.sin(frame * 0.05 + i) * 20;
+            for (let i = 0; i < particleCount; i++) {
+                const seed = seededRandom(i * 89);
+                const speed = 2 + seed * 3;
+                const x = ((frame * speed + seed * canvas.width) % (canvas.width + 200)) - 100;
+                const y = seed * canvas.height * 0.7 + Math.sin(frame * 0.02 + i) * 30;
+                const length = 30 + seed * 50;
 
                 ctx.beginPath();
                 ctx.moveTo(x, y);
-                ctx.lineTo(x + 50, y + 5);
+                ctx.quadraticCurveTo(x + length * 0.5, y - 5 + Math.sin(frame * 0.05 + i) * 3, x + length, y);
                 ctx.stroke();
             }
         }
 
         function drawRoots(health) {
-            // Dark veins/roots in the ground
-            if (health < 10) return;
+            const h = health / 100;
+            const groundY = canvas.height * 0.6;
 
-            ctx.strokeStyle = `rgba(40, 20, 10, ${health / 200})`;
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = `rgba(60, 40, 30, ${0.3 + h * 0.4})`;
+            ctx.lineWidth = 2 + h * 2;
+            ctx.lineCap = 'round';
 
-            const count = 5;
-            for (let i = 0; i < count; i++) {
-                const startX = (canvas.width / count) * i + 100;
-                const startY = canvas.height * 0.6;
+            const rootCount = 5 + Math.floor(h * 5);
+            for (let i = 0; i < rootCount; i++) {
+                const seed = treeSeed + i * 200;
+                const startX = seededRandom(seed) * canvas.width;
+                const depth = 50 + seededRandom(seed + 1) * 100 * h;
 
                 ctx.beginPath();
-                ctx.moveTo(startX, startY);
-                // Simple squiggle
-                ctx.bezierCurveTo(startX - 20, startY + 50, startX + 20, startY + 100, startX, startY + 150);
+                ctx.moveTo(startX, groundY);
+
+                // Organic root path
+                let x = startX;
+                let y = groundY;
+                for (let j = 0; j < 5; j++) {
+                    const dx = (seededRandom(seed + j * 10) - 0.5) * 60;
+                    const dy = depth / 5;
+                    x += dx;
+                    y += dy;
+                    ctx.lineTo(x, y);
+                }
                 ctx.stroke();
             }
         }
 
         function drawFruits(health) {
-            // Apples on trees
-            // Only if trees exist (implied by previous stages)
-            const count = 3 + Math.floor(gardenState[2] / 25);
-            if (health < 40) return;
+            const h = health / 100;
+            if (h < 0.3) return;
 
-            for (let i = 0; i < count; i++) {
-                const x = (canvas.width / (count + 1)) * (i + 1);
-                // Approximate tree top location from drawTrees
-                // We just place them arbitrarily near top of tree trunk
+            const treeCount = 3 + Math.floor(displayState[2] / 100 * 4);
 
-                ctx.fillStyle = '#ff4444';
-                // Multiple fruits per tree
-                const fruitCount = Math.floor(health / 20);
+            for (let i = 0; i < treeCount; i++) {
+                const seed = treeSeed + i * 100;
+                const treeX = canvas.width * (0.1 + (i / treeCount) * 0.8) + seededRandom(seed) * 60 - 30;
+                const treeY = canvas.height * 0.6;
+                const treeHeight = 50 + (displayState[2] / 100) * 80;
+
+                const fruitCount = Math.floor(h * 5);
                 for (let j = 0; j < fruitCount; j++) {
-                    const fx = x + Math.cos(j * 2 + frame * 0.01) * 30;
-                    const fy = (canvas.height * 0.6) - 120 + Math.sin(j * 2) * 30;
+                    const fseed = seed + j * 30;
+                    const angle = seededRandom(fseed) * Math.PI - Math.PI / 2;
+                    const dist = 30 + seededRandom(fseed + 1) * 50;
+                    const fx = treeX + Math.cos(angle) * dist;
+                    const fy = treeY - treeHeight * 0.7 + Math.sin(angle) * dist * 0.5;
 
+                    // Gentle sway
+                    const sway = Math.sin(frame * 0.02 + fseed) * 3;
+
+                    // Fruit
+                    const size = 5 + h * 5 + pulseIntensity * 2;
+                    const gradient = ctx.createRadialGradient(fx + sway, fy, 0, fx + sway, fy, size);
+                    gradient.addColorStop(0, '#ff6b6b');
+                    gradient.addColorStop(0.7, '#ee5a5a');
+                    gradient.addColorStop(1, '#cc4444');
+
+                    ctx.fillStyle = gradient;
                     ctx.beginPath();
-                    ctx.arc(fx, fy, 4 + health / 30, 0, Math.PI * 2);
+                    ctx.arc(fx + sway, fy, size, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Highlight
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+                    ctx.beginPath();
+                    ctx.arc(fx + sway - size * 0.3, fy - size * 0.3, size * 0.25, 0, Math.PI * 2);
                     ctx.fill();
                 }
             }
