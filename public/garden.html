@@ -109,16 +109,7 @@
         const canvas = document.getElementById('gardenCanvas');
         const ctx = canvas.getContext('2d');
 
-        // Setup Canvas
-        function resize() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-            if (gardenState.length) drawGarden();
-        }
-        window.addEventListener('resize', resize);
-        resize(); // Call immediately on load
-
-        // Game State
+        // Game State (must be defined before resize/animate)
         let currentQuestionIndex = 0;
         let gardenState = new Array(10).fill(50); // Store averages here
         let voteCounts = new Array(10).fill(0); // Store vote counts
@@ -131,12 +122,16 @@
 
         // Animation Loop
         let frame = 0;
-        function animate() {
-            frame++;
-            drawGarden();
-            requestAnimationFrame(animate);
+
+        // Setup Canvas
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
         }
-        animate(); // Start loop
+        window.addEventListener('resize', resize);
+        resize(); // Call immediately on load
+
+        // Start animation after drawGarden is defined (moved to bottom)
 
         // --- Supabase Logic ---
 
@@ -262,10 +257,6 @@
                 updateHUD();
             }
         }
-
-
-        // Initialize the application
-        init();
 
         // --- VISUALIZATION LOGIC ---
         function drawGarden() {
@@ -585,6 +576,19 @@
                 }
             }
         }
+
+        // --- START APPLICATION ---
+        // Animation loop (must be after drawGarden is defined)
+        function animate() {
+            frame++;
+            drawGarden();
+            requestAnimationFrame(animate);
+        }
+
+        // Initialize and start
+        init();
+        updateHUD();
+        animate();
     </script>
 </body>
 
