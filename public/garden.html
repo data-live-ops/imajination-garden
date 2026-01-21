@@ -23,26 +23,45 @@
             position: absolute;
             bottom: 20px;
             left: 20px;
-            background: rgba(255, 255, 255, 0.2);
-            padding: 10px;
-            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px 20px;
+            border-radius: 12px;
             display: flex;
-            gap: 10px;
-            opacity: 0;
-            /* Hidden by default, hover to see */
-            transition: opacity 0.3s;
-        }
-
-        #controls:hover {
+            gap: 15px;
             opacity: 1;
+            z-index: 100;
         }
 
         button {
-            padding: 8px 16px;
+            padding: 12px 24px;
             cursor: pointer;
-            background: #fff;
+            background: #4A90E2;
+            color: white;
             border: none;
-            border-radius: 4px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #357ABD;
+        }
+
+        #next-btn {
+            background: #27ae60;
+        }
+
+        #next-btn:hover {
+            background: #1e8449;
+        }
+
+        #reset-btn {
+            background: #e74c3c;
+        }
+
+        #reset-btn:hover {
+            background: #c0392b;
         }
 
         .hud {
@@ -76,8 +95,8 @@
     </div>
 
     <div id="controls">
-        <button>Next Question</button>
-        <button>Reset Garden</button>
+        <button id="next-btn" onclick="nextQuestion()">Next Question &#10132;</button>
+        <button id="reset-btn" onclick="resetGarden()">Reset Garden</button>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -85,7 +104,7 @@
         // Supabase Config
         const SUPABASE_URL = 'https://uxyojsfbpvugnudbhwhb.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV4eW9qc2ZicHZ1Z251ZGJod2hiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4OTI0NjgsImV4cCI6MjA4NDQ2ODQ2OH0.p8uP0jHpEvsblAR--oSST5rSAXkhM3-MgRvQTsxv_r0';
-        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         const canvas = document.getElementById('gardenCanvas');
         const ctx = canvas.getContext('2d');
@@ -97,6 +116,7 @@
             if (gardenState.length) drawGarden();
         }
         window.addEventListener('resize', resize);
+        resize(); // Call immediately on load
 
         // Game State
         let currentQuestionIndex = 0;
@@ -122,7 +142,7 @@
 
         async function init() {
             // 1. Get Game State
-            const { data: gsData } = await supabase
+            const { data: gsData } = await supabaseClient
                 .from('game_state')
                 .select('current_question_index')
                 .eq('id', 1)
@@ -132,7 +152,7 @@
             }
 
             // 2. Fetch ALL answers to build initial state (Heavy initial load, ok for <10k rows)
-            const { data: allAnswers } = await supabase.from('answers').select('question_index, value');
+            const { data: allAnswers } = await supabaseClient.from('answers').select('question_index, value');
 
             if (allAnswers) {
                 allAnswers.forEach(ans => {
@@ -146,7 +166,7 @@
             updateHUD();
 
             // 3. Listen for NEW answers
-            supabase
+            supabaseClient
                 .channel('room1')
                 .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'answers' }, payload => {
                     const newAns = payload.new;
@@ -192,49 +212,97 @@
             document.getElementById('stats').innerText = text;
         }
 
-        // Removed dead socket code
+        // --- HOST CONTROL FUNCTIONS ---
 
+        async function nextQuestion() {
+            if (currentQuestionIndex >= 9) {
+                alert('Sudah di pertanyaan terakhir!');
+                return;
+            }
 
-        // --- VISUALIZATION LOGIC ---
+            const newIndex = currentQuestionIndex + 1;
+            const { error } = await supabaseClient
+                .from('game_state')
+                .update({ current_question_index: newIndex })
+                .eq('id', 1);
+
+            if (error) {
+                console.error('Error advancing question:', error);
+                alert('Gagal pindah pertanyaan');
+            } else {
+                currentQuestionIndex = newIndex;
+                updateHUD();
+            }
+        }
+
+        async function resetGarden() {
+            if (!confirm('Yakin ingin reset garden? Semua jawaban akan dihapus.')) return;
+
+            // Reset game state to question 0
+            const { error: stateError } = await supabaseClient
+                .from('game_state')
+                .update({ current_question_index: 0 })
+                .eq('id', 1);
+
+            // Delete all answers
+            const { error: answersError } = await supabaseClient
+                .from('answers')
+                .delete()
+                .gte('id', 0);
+
+            if (stateError || answersError) {
+                console.error('Error resetting:', stateError || answersError);
+                alert('Gagal reset garden');
+            } else {
+                // Reset local state
+                currentQuestionIndex = 0;
+                gardenState = new Array(10).fill(50);
+                voteCounts = new Array(10).fill(0);
+                rawAnswers = Array.from({ length: 10 }, () => []);
+                updateHUD();
+            }
+        }
+
 
         // Initialize the application
         init();
 
         // --- VISUALIZATION LOGIC ---
-        // Clearing handled by Sky/Terrain draws mostly, but good practice
-        // ctx.clearRect(0, 0, canvas.width, canvas.height);
+        function drawGarden() {
+            // Clearing handled by Sky/Terrain draws mostly, but good practice
+            // ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // 1. Terrain (Background)
-        drawTerrain(gardenState[0]);
+            // 1. Terrain (Background)
+            drawTerrain(gardenState[0]);
 
-        // 2. Sky (Weather)
-        drawSky(gardenState[1]);
+            // 2. Sky (Weather)
+            drawSky(gardenState[1]);
 
-        // Save context for camera/shakes if needed, but keeping it static for now
+            // Save context for camera/shakes if needed, but keeping it static for now
 
-        // 3. Trees (Structure) - Stage 3
-        if (currentQuestionIndex >= 2) drawTrees(gardenState[2]);
+            // 3. Trees (Structure) - Stage 3
+            if (currentQuestionIndex >= 2) drawTrees(gardenState[2]);
 
-        // 9. Roots/Depth - Stage 9 (Drawn behind other ground elements)
-        if (currentQuestionIndex >= 8) drawRoots(gardenState[8]);
+            // 9. Roots/Depth - Stage 9 (Drawn behind other ground elements)
+            if (currentQuestionIndex >= 8) drawRoots(gardenState[8]);
 
-        // 5. Water (Clarity) - Stage 5
-        if (currentQuestionIndex >= 4) drawWater(gardenState[4]);
+            // 5. Water (Clarity) - Stage 5
+            if (currentQuestionIndex >= 4) drawWater(gardenState[4]);
 
-        // 4. Flowers (Beauty) - Stage 4
-        if (currentQuestionIndex >= 3) drawFlowers(gardenState[3]);
+            // 4. Flowers (Beauty) - Stage 4
+            if (currentQuestionIndex >= 3) drawFlowers(gardenState[3]);
 
-        // 6. Joy (Fauna/Fireflies) - Stage 6
-        if (currentQuestionIndex >= 5) drawFauna(gardenState[5]);
+            // 6. Joy (Fauna/Fireflies) - Stage 6
+            if (currentQuestionIndex >= 5) drawFauna(gardenState[5]);
 
-        // 7. Sun/Light (Warmth) - Stage 7
-        if (currentQuestionIndex >= 6) drawSun(gardenState[6]);
+            // 7. Sun/Light (Warmth) - Stage 7
+            if (currentQuestionIndex >= 6) drawSun(gardenState[6]);
 
-        // 8. Wind/Particles (Interaction) - Stage 8
-        if (currentQuestionIndex >= 7) drawWind(gardenState[7]);
+            // 8. Wind/Particles (Interaction) - Stage 8
+            if (currentQuestionIndex >= 7) drawWind(gardenState[7]);
 
-        // 10. Fruits/Future - Stage 10
-        if (currentQuestionIndex >= 9) drawFruits(gardenState[9]);
+            // 10. Fruits/Future - Stage 10
+            if (currentQuestionIndex >= 9) drawFruits(gardenState[9]);
         }
 
         // --- DRAWING FUNCTIONS ---

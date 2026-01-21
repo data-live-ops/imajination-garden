@@ -152,7 +152,7 @@
         // Supabase Config
         const SUPABASE_URL = 'https://uxyojsfbpvugnudbhwhb.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV4eW9qc2ZicHZ1Z251ZGJod2hiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4OTI0NjgsImV4cCI6MjA4NDQ2ODQ2OH0.p8uP0jHpEvsblAR--oSST5rSAXkhM3-MgRvQTsxv_r0';
-        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         let currentQuestionIndex = 0;
         let hasAnswered = false;
@@ -176,7 +176,7 @@
             document.getElementById('connection-status').style.color = 'green';
 
             // Get current state
-            const { data, error } = await supabase
+            const { data, error } = await supabaseClient
                 .from('game_state')
                 .select('current_question_index')
                 .eq('id', 1)
@@ -188,7 +188,7 @@
             }
 
             // Listen for state changes
-            supabase
+            supabaseClient
                 .channel('game_state_channel')
                 .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'game_state' }, payload => {
                     const newIndex = payload.new.current_question_index;
@@ -237,7 +237,7 @@
             hasAnswered = true;
             updateUI();
 
-            const { error } = await supabase
+            const { error } = await supabaseClient
                 .from('answers')
                 .insert([{ question_index: currentQuestionIndex, value: value }]);
 
