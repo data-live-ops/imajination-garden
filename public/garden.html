@@ -259,41 +259,46 @@
         }
 
         // --- VISUALIZATION LOGIC ---
+        // Helper: check if stage has votes (element should appear)
+        function hasVotes(stageIndex) {
+            return voteCounts[stageIndex] > 0;
+        }
+
         function drawGarden() {
             // Clearing handled by Sky/Terrain draws mostly, but good practice
             // ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 1. Terrain (Background)
-            drawTerrain(gardenState[0]);
+            // 1. Terrain (Background) - always show, but based on votes
+            drawTerrain(hasVotes(0) ? gardenState[0] : 30); // Default barren if no votes
 
-            // 2. Sky (Weather)
-            drawSky(gardenState[1]);
+            // 2. Sky (Weather) - always show, but based on votes
+            drawSky(hasVotes(1) ? gardenState[1] : 30); // Default gloomy if no votes
 
             // Save context for camera/shakes if needed, but keeping it static for now
 
-            // 3. Trees (Structure) - Stage 3
-            if (currentQuestionIndex >= 2) drawTrees(gardenState[2]);
+            // 3. Trees (Structure) - Stage 3: only show if has votes
+            if (currentQuestionIndex >= 2 && hasVotes(2)) drawTrees(gardenState[2]);
 
-            // 9. Roots/Depth - Stage 9 (Drawn behind other ground elements)
-            if (currentQuestionIndex >= 8) drawRoots(gardenState[8]);
+            // 9. Roots/Depth - Stage 9: only show if has votes
+            if (currentQuestionIndex >= 8 && hasVotes(8)) drawRoots(gardenState[8]);
 
-            // 5. Water (Clarity) - Stage 5
-            if (currentQuestionIndex >= 4) drawWater(gardenState[4]);
+            // 5. Water (Clarity) - Stage 5: only show if has votes
+            if (currentQuestionIndex >= 4 && hasVotes(4)) drawWater(gardenState[4]);
 
-            // 4. Flowers (Beauty) - Stage 4
-            if (currentQuestionIndex >= 3) drawFlowers(gardenState[3]);
+            // 4. Flowers (Beauty) - Stage 4: only show if has votes
+            if (currentQuestionIndex >= 3 && hasVotes(3)) drawFlowers(gardenState[3]);
 
-            // 6. Joy (Fauna/Fireflies) - Stage 6
-            if (currentQuestionIndex >= 5) drawFauna(gardenState[5]);
+            // 6. Joy (Fauna/Fireflies) - Stage 6: only show if has votes
+            if (currentQuestionIndex >= 5 && hasVotes(5)) drawFauna(gardenState[5]);
 
-            // 7. Sun/Light (Warmth) - Stage 7
-            if (currentQuestionIndex >= 6) drawSun(gardenState[6]);
+            // 7. Sun/Light (Warmth) - Stage 7: only show if has votes
+            if (currentQuestionIndex >= 6 && hasVotes(6)) drawSun(gardenState[6]);
 
-            // 8. Wind/Particles (Interaction) - Stage 8
-            if (currentQuestionIndex >= 7) drawWind(gardenState[7]);
+            // 8. Wind/Particles (Interaction) - Stage 8: only show if has votes
+            if (currentQuestionIndex >= 7 && hasVotes(7)) drawWind(gardenState[7]);
 
-            // 10. Fruits/Future - Stage 10
-            if (currentQuestionIndex >= 9) drawFruits(gardenState[9]);
+            // 10. Fruits/Future - Stage 10: only show if has votes
+            if (currentQuestionIndex >= 9 && hasVotes(9)) drawFruits(gardenState[9]);
         }
 
         // --- DRAWING FUNCTIONS ---
